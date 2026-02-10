@@ -1,0 +1,380 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width,initial-scale=1" />
+  <title>EOQ Interactive Simulator — Bananas (or any SKU)</title>
+
+  <!-- Chart.js from CDN -->
+  <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
+
+  <style>
+    :root{
+      --bg:#0f1724; --card:#0b1220; --accent:#06b6d4; --muted:#93c5fd;
+      --text:#e6eef6; --panel:#0b1220;
+    }
+    body{
+      margin:0; font-family:Inter,system-ui,-apple-system,Segoe UI,Roboto,"Helvetica Neue",Arial;
+      background: linear-gradient(180deg,#071021 0%, #06202b 100%); color:var(--text);
+      -webkit-font-smoothing:antialiased; -moz-osx-font-smoothing:grayscale;
+    }
+    .wrap{max-width:1100px;margin:28px auto;padding:20px;}
+    header{display:flex;align-items:center;gap:16px;margin-bottom:18px}
+    header h1{font-size:1.25rem;margin:0}
+    .grid{display:grid;grid-template-columns:320px 1fr;gap:18px}
+    .panel{background:rgba(255,255,255,0.02);padding:16px;border-radius:10px;box-shadow:0 6px 18px rgba(2,6,23,0.6);}
+    label{display:block;font-size:0.85rem;color:var(--muted);margin-bottom:6px}
+    .field{margin-bottom:12px}
+    input[type="number"], input[type="range"], select {
+      width:100%; padding:8px 10px; border-radius:8px; border:1px solid rgba(255,255,255,0.06);
+      background:transparent; color:var(--text); font-size:0.95rem;
+    }
+    .row{display:flex;gap:10px}
+    .col{flex:1}
+    .stat{background:rgba(255,255,255,0.02); padding:10px;border-radius:8px; text-align:center}
+    .stat .val{font-weight:700; font-size:1.1rem}
+    .chart-wrap{background:linear-gradient(180deg, rgba(255,255,255,0.01), rgba(255,255,255,0.015)); padding:14px;border-radius:10px}
+    .table-wrap{max-height:260px; overflow:auto; margin-top:12px; border-radius:8px; background:rgba(0,0,0,0.18); padding:10px}
+    table{width:100%;border-collapse:collapse;font-size:0.9rem}
+    th,td{padding:6px 8px;text-align:right;border-bottom:1px dashed rgba(255,255,255,0.03); color:var(--text)}
+    th{position:sticky;top:0;background:rgba(255,255,255,0.02);text-align:left;color:var(--muted)}
+    .controls-row{display:flex;gap:10px;align-items:center;margin-top:8px}
+    button{background:var(--accent);border:none;color:#022; padding:8px 12px;border-radius:8px;cursor:pointer;font-weight:600}
+    a.small{font-size:0.85rem;color:var(--muted);text-decoration:none}
+    footer{margin-top:16px;color:rgba(255,255,255,0.5);font-size:0.85rem}
+    .note{font-size:0.85rem;color:rgba(255,255,255,0.7)}
+    @media(max-width:880px){.grid{grid-template-columns:1fr;}}
+  </style>
+</head>
+<body>
+  <div class="wrap">
+    <header>
+      <h1>EOQ Interactive Simulator</h1>
+      <div class="note">Change parameters, slide Q, and observe ordering/holding/total costs. Download the CSV of results.</div>
+    </header>
+
+    <div class="grid">
+      <!-- Left controls -->
+      <aside class="panel" aria-label="Inputs">
+        <div class="field">
+          <label for="D">Demand (D) — units per period</label>
+          <input id="D" type="number" min="1" step="1" value="150" />
+        </div>
+
+        <div class="field">
+          <label for="S">Ordering/Setup Cost (K or S) — $ per order</label>
+          <input id="S" type="number" min="0" step="0.01" value="2" />
+        </div>
+
+        <div class="field">
+          <label for="H">Holding Cost (h) — $ per unit per period</label>
+          <input id="H" type="number" min="0" step="0.0001" value="0.24" />
+        </div>
+
+        <div class="field">
+          <label for="unit_cost">Unit purchase cost (optional, for full-cost view)</label>
+          <input id="unit_cost" type="number" min="0" step="0.01" value="0" />
+        </div>
+
+        <div class="field">
+          <label for="maxFactor">Plot Q up to (factor × EOQ)</label>
+          <input id="maxFactor" type="number" min="1" step="0.5" value="2.5" />
+        </div>
+
+        <hr style="border:none;border-top:1px solid rgba(255,255,255,0.03);margin:10px 0">
+
+        <div class="field">
+          <label for="Qchosen">Chosen Order Quantity Q (slide or type)</label>
+          <input id="Qchosen" type="range" min="1" max="200" value="50" />
+          <div style="display:flex;gap:8px;margin-top:8px">
+            <input id="Qchosen_num" class="col" type="number" min="1" step="1" value="50" />
+            <button id="setEOQ">Set to EOQ</button>
+          </div>
+        </div>
+
+        <div class="controls-row">
+          <button id="recompute">Recompute / Update Plot</button>
+          <button id="downloadCSV">Download CSV</button>
+        </div>
+
+        <div style="margin-top:12px">
+          <div style="display:grid;grid-template-columns:1fr 1fr;gap:8px">
+            <div class="stat">
+              <div class="small">EOQ (continuous)</div>
+              <div class="val" id="eoq_val">—</div>
+            </div>
+            <div class="stat">
+              <div class="small">Rounded EOQ</div>
+              <div class="val" id="eoq_round">—</div>
+            </div>
+          </div>
+
+          <div style="display:grid;grid-template-columns:1fr 1fr;gap:8px;margin-top:8px">
+            <div class="stat" title="Ordering cost at chosen Q">
+              <div class="small">Ordering Cost</div>
+              <div class="val" id="ordering_val">—</div>
+            </div>
+            <div class="stat" title="Holding cost at chosen Q">
+              <div class="small">Holding Cost</div>
+              <div class="val" id="holding_val">—</div>
+            </div>
+          </div>
+
+          <div style="margin-top:8px">
+            <div class="stat">
+              <div class="small">Total (Ordering + Holding)</div>
+              <div class="val" id="total_val">—</div>
+            </div>
+          </div>
+        </div>
+
+      </aside>
+
+      <!-- Right: Chart + table -->
+      <main>
+        <div class="panel chart-wrap">
+          <canvas id="eoChart" height="220"></canvas>
+        </div>
+
+        <div class="panel table-wrap" id="tablePanel">
+          <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:6px">
+            <strong>Q vs Costs table</strong>
+            <span class="small">Note: costs in dollars per period</span>
+          </div>
+          <div id="tableContainer"></div>
+        </div>
+      </main>
+    </div>
+
+    <footer>
+      <div style="display:flex;justify-content:space-between;align-items:center;margin-top:12px">
+        <div>Suggested exercise: compute EOQ by hand using formula and verify the chart. Use Q = EOQ/2 and Q = 2×EOQ to compare costs.</div>
+        <div><a class="small" href="#" id="aboutLink">About/Usage</a></div>
+      </div>
+    </footer>
+  </div>
+
+<script>
+/* EOQ interactive simulator logic */
+(function(){
+  // DOM elements
+  const D_in = document.getElementById('D');
+  const S_in = document.getElementById('S');
+  const H_in = document.getElementById('H');
+  const unit_in = document.getElementById('unit_cost');
+  const maxFactor_in = document.getElementById('maxFactor');
+  const Q_range = document.getElementById('Qchosen');
+  const Q_num = document.getElementById('Qchosen_num');
+  const setEOQ_btn = document.getElementById('setEOQ');
+  const recompute_btn = document.getElementById('recompute');
+  const download_btn = document.getElementById('downloadCSV');
+
+  const eoq_val = document.getElementById('eoq_val');
+  const eoq_round = document.getElementById('eoq_round');
+  const ordering_val = document.getElementById('ordering_val');
+  const holding_val = document.getElementById('holding_val');
+  const total_val = document.getElementById('total_val');
+  const tableContainer = document.getElementById('tableContainer');
+
+  // Chart.js setup
+  let chart = null;
+
+  function computeEOQ(D,S,H){
+    if(D<=0 || S<=0 || H<=0) return NaN;
+    return Math.sqrt((2*D*S)/H);
+  }
+
+  function generateTable(D,S,H,unitCost, maxFactor, chosenQ){
+    const EOQ = computeEOQ(D,S,H);
+    const EOQ_int = Math.max(1, Math.round(EOQ || 0));
+    const maxQ = Math.max( Math.ceil( (EOQ || 10) * maxFactor ), chosenQ + 10, 50 );
+    const rows = [];
+    for(let q=1; q<=maxQ; q++){
+      const ordering = (D / q) * S;
+      const holding = (q / 2) * H;
+      const purchase = D * (unitCost || 0);
+      const total = ordering + holding + purchase;
+      rows.push({q, ordering, holding, total, purchase});
+    }
+    return {rows, EOQ, EOQ_int, maxQ};
+  }
+
+  function updateUI(){
+    const D = parseFloat(D_in.value) || 0;
+    const S = parseFloat(S_in.value) || 0;
+    const H = parseFloat(H_in.value) || 0;
+    const unitCost = parseFloat(unit_in.value) || 0;
+    const maxFactor = parseFloat(maxFactor_in.value) || 2.5;
+    let chosenQ = parseInt(Q_num.value) || 1;
+
+    const {rows, EOQ, EOQ_int, maxQ} = generateTable(D,S,H,unitCost, maxFactor, chosenQ);
+
+    // clamp chosenQ into range
+    if(chosenQ < 1) chosenQ = 1;
+    if(chosenQ > maxQ) chosenQ = maxQ;
+    Q_num.value = chosenQ;
+    Q_range.min = 1;
+    Q_range.max = maxQ;
+    Q_range.value = chosenQ;
+
+    // EOQ display
+    eoq_val.textContent = isFinite(EOQ) ? Number(EOQ).toFixed(2) : '—';
+    eoq_round.textContent = isFinite(EOQ_int) ? EOQ_int : '—';
+
+    // find chosen row
+    const chosenRow = rows.find(r => r.q === chosenQ);
+    if(chosenRow){
+      ordering_val.textContent = '$' + chosenRow.ordering.toFixed(2);
+      holding_val.textContent = '$' + chosenRow.holding.toFixed(2);
+      total_val.textContent = '$' + (chosenRow.ordering + chosenRow.holding).toFixed(2);
+    } else {
+      ordering_val.textContent = '—';
+      holding_val.textContent = '—';
+      total_val.textContent = '—';
+    }
+
+    // build chart data arrays
+    const qs = rows.map(r => r.q);
+    const orderingSeries = rows.map(r => Number(r.ordering.toFixed(8)));
+    const holdingSeries = rows.map(r => Number(r.holding.toFixed(8)));
+    const totalSeries = rows.map(r => Number((r.ordering + r.holding).toFixed(8)));
+
+    // Update Chart
+    renderChart(qs, orderingSeries, holdingSeries, totalSeries, EOQ_int, chosenQ);
+
+    // Update Table (showing all rows but truncated to reasonable length on screen)
+    renderTable(rows);
+  }
+
+  function renderChart(qs, orderingSeries, holdingSeries, totalSeries, EOQ_int, chosenQ){
+    const ctx = document.getElementById('eoChart').getContext('2d');
+
+    // Destroy previous chart if exists
+    if(chart) chart.destroy();
+
+    chart = new Chart(ctx, {
+      type:'line',
+      data:{
+        labels: qs,
+        datasets:[
+          {label:'Ordering Cost', data: orderingSeries, borderWidth:2, fill:false, tension:0.15},
+          {label:'Holding Cost', data: holdingSeries, borderWidth:2, fill:false, tension:0.15},
+          {label:'Total (Ordering+Holding)', data: totalSeries, borderWidth:2, fill:false, tension:0.15}
+        ]
+      },
+      options:{
+        responsive:true,
+        interaction:{mode:'index',intersect:false},
+        plugins:{
+          legend:{position:'top'},
+          tooltip:{callbacks:{
+            label: function(ctx){
+              return ctx.dataset.label + ': $' + Number(ctx.raw).toFixed(2);
+            }
+          }}
+        },
+        scales:{
+          x:{ title:{display:true, text:'Order Quantity Q (units)'}, ticks:{maxTicksLimit:12} },
+          y:{ title:{display:true, text:'Cost ($ per period)'} }
+        },
+        animation:false
+      }
+    });
+
+    // add EOQ and chosen point annotations via scatter overlays (simple)
+    // Add EOQ marker
+    if(EOQ_int >= 1 && qs.includes(EOQ_int)){
+      const eoqIndex = qs.indexOf(EOQ_int);
+      const eoqVal = totalSeries[eoqIndex];
+      // draw small circle on chart canvas
+      drawMarker(chart, eoqIndex, eoqVal, 'EOQ ≈ ' + EOQ_int, 'black');
+    }
+    if(chosenQ >=1 && qs.includes(chosenQ)){
+      const qIndex = qs.indexOf(chosenQ);
+      const qVal = totalSeries[qIndex];
+      drawMarker(chart, qIndex, qVal, 'Chosen Q = ' + chosenQ, 'gray');
+    }
+  }
+
+  function drawMarker(chart, index, yvalue, label, color){
+    // Convert to pixel pos
+    const meta = chart.getDatasetMeta(2); // total series meta
+    const xScale = chart.scales.x;
+    const yScale = chart.scales.y;
+    const x = xScale.getPixelForValue(chart.data.labels[index]);
+    const y = yScale.getPixelForValue(yvalue);
+    const ctx = chart.ctx;
+    ctx.save();
+    // circle
+    ctx.fillStyle = color || 'black';
+    ctx.beginPath();
+    ctx.arc(x, y, 6, 0, 2*Math.PI);
+    ctx.fill();
+    // label
+    ctx.fillStyle = 'rgba(255,255,255,0.9)';
+    ctx.font = '12px sans-serif';
+    ctx.textAlign = 'center';
+    ctx.fillText(label, x, y - 12);
+    ctx.restore();
+  }
+
+  function renderTable(rows){
+    // Build HTML table
+    let html = '<table><thead><tr><th>Q</th><th>Ordering ($)</th><th>Holding ($)</th><th>Total ($)</th></tr></thead><tbody>';
+    // show all rows but warn: for big maxQ this might be long
+    for(const r of rows){
+      html += `<tr><td style="text-align:left">${r.q}</td><td>$${r.ordering.toFixed(2)}</td><td>$${r.holding.toFixed(2)}</td><td>$${(r.ordering+r.holding).toFixed(2)}</td></tr>`;
+    }
+    html += '</tbody></table>';
+    tableContainer.innerHTML = html;
+  }
+
+  // CSV download
+  function downloadCSV(){
+    const D = parseFloat(D_in.value) || 0;
+    const S = parseFloat(S_in.value) || 0;
+    const H = parseFloat(H_in.value) || 0;
+    const unitCost = parseFloat(unit_in.value) || 0;
+    const maxFactor = parseFloat(maxFactor_in.value) || 2.5;
+    const chosenQ = parseInt(Q_num.value) || 1;
+    const {rows, EOQ, EOQ_int, maxQ} = generateTable(D,S,H,unitCost, maxFactor, chosenQ);
+    let csv = 'Q,Ordering,Holding,Total\\n';
+    for(const r of rows){
+      csv += `${r.q},${r.ordering.toFixed(4)},${r.holding.toFixed(4)},${(r.ordering+r.holding).toFixed(4)}\\n`;
+    }
+    const blob = new Blob([csv], {type:'text/csv;charset=utf-8;'});
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement('a');
+    a.href = url; a.download = 'eoq_simulation.csv'; a.style.display='none';
+    document.body.appendChild(a); a.click(); document.body.removeChild(a);
+    URL.revokeObjectURL(url);
+  }
+
+  // wire up events
+  Q_range.addEventListener('input', ()=>{ Q_num.value = Q_range.value; updateUI(); });
+  Q_num.addEventListener('change', ()=>{ Q_range.value = Q_num.value; updateUI(); });
+  setEOQ_btn.addEventListener('click', ()=>{
+    // set to rounded EOQ
+    const D = parseFloat(D_in.value) || 0;
+    const S = parseFloat(S_in.value) || 0;
+    const H = parseFloat(H_in.value) || 0;
+    const EOQ = computeEOQ(D,S,H);
+    const EOQ_int = Math.max(1, Math.round(EOQ || 0));
+    Q_num.value = EOQ_int; Q_range.value = EOQ_int; updateUI();
+  });
+  recompute_btn.addEventListener('click', updateUI);
+  download_btn.addEventListener('click', downloadCSV);
+
+  // initial render
+  updateUI();
+
+  // about link
+  document.getElementById('aboutLink').addEventListener('click', (e)=>{
+    e.preventDefault();
+    alert('EOQ formula: EOQ = sqrt(2DS/H). Ordering cost = (D/Q)×S. Holding cost = (Q/2)×H. Total = Ordering + Holding.');
+  });
+
+})();
+</script>
+</body>
+</html>
