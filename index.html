@@ -58,7 +58,7 @@
       <aside class="panel" aria-label="Inputs">
         <div class="field">
           <label for="D">Demand (D) — units per period</label>
-          <input id="D" type="number" min="1" step="1" value="150" />
+          <input id="D" type="number" min="0" step="1" value="150" />
         </div>
 
         <div class="field">
@@ -71,7 +71,8 @@
           <input id="H" type="number" min="0" step="0.0001" value="0.24" />
         </div>
 
-        <div class="field">
+        <!-- Hidden purchase cost (kept in DOM but not shown) -->
+        <div class="field" style="display:none">
           <label for="unit_cost">Unit purchase cost (optional, for full-cost view)</label>
           <input id="unit_cost" type="number" min="0" step="0.01" value="0" />
         </div>
@@ -85,9 +86,10 @@
 
         <div class="field">
           <label for="Qchosen">Chosen Order Quantity Q (slide or type)</label>
-         <input id="Qchosen" type="range" min="0" max="150" step="1" value="50" />
+          <!-- slider starts 0 and will be dynamically capped to D -->
+          <input id="Qchosen" type="range" min="0" max="150" step="1" value="50" />
           <div style="display:flex;gap:8px;margin-top:8px">
-            <input id="Qchosen_num" class="col" type="number" min="1" step="1" value="50" />
+            <input id="Qchosen_num" class="col" type="number" min="0" step="1" value="50" />
             <button id="setEOQ">Set to EOQ</button>
           </div>
         </div>
@@ -155,7 +157,7 @@
   </div>
 
 <script>
-/* EOQ interactive simulator logic */
+/* EOQ interactive simulator logic (corrected) */
 (function(){
   // DOM elements
   const D_in = document.getElementById('D');
@@ -186,15 +188,14 @@
 
   function generateTable(D,S,H,unitCost, maxFactor, chosenQ){
     const EOQ = computeEOQ(D,S,H);
-    const EOQ_int = Math.max(1, Math.round(EOQ || 0));
+    const EOQ_int = Math.max(0, Math.round(EOQ || 0));
     const maxQ = Math.max( Math.ceil( (EOQ || 10) * maxFactor ), chosenQ + 10, 50 );
     const rows = [];
     for(let q=1; q<=maxQ; q++){
       const ordering = (D / q) * S;
       const holding = (q / 2) * H;
-      const purchase = D * (unitCost || 0);
-      const total = ordering + holding + purchase;
-      rows.push({q, ordering, holding, total, purchase});
+      const total = ordering + holding;           // exclude purchase cost
+      rows.push({q, ordering, holding, total});
     }
     return {rows, EOQ, EOQ_int, maxQ};
   }
@@ -205,44 +206,50 @@
     const H = parseFloat(H_in.value) || 0;
     const unitCost = parseFloat(unit_in.value) || 0;
     const maxFactor = parseFloat(maxFactor_in.value) || 2.5;
-    let chosenQ = parseInt(Q_num.value) || 1;
+
+    // read chosenQ as integer (allow 0)
+    let chosenQ = Math.floor(Number(Q_num.value) || 0);
 
     const {rows, EOQ, EOQ_int, maxQ} = generateTable(D,S,H,unitCost, maxFactor, chosenQ);
 
-    // clamp chosenQ into range
-    if(chosenQ < 1) chosenQ = 1;
-    if(chosenQ > maxQ) chosenQ = maxQ;
+    // Clamp chosenQ to [0, D]
+    const D_int = Math.max(0, Math.floor(D));
+    if (chosenQ < 0) chosenQ = 0;
+    if (chosenQ > D_int) chosenQ = D_int;
+
+    // Set slider min/max to [0, D] and use integer step
     Q_num.value = chosenQ;
-    Q_range.min = 1;
-    Q_range.max = maxQ;
+    Q_range.min = 0;
+    Q_range.max = D_int > 0 ? D_int : 1;   // avoid zero max area
+    Q_range.step = 1;
     Q_range.value = chosenQ;
 
     // EOQ display
     eoq_val.textContent = isFinite(EOQ) ? Number(EOQ).toFixed(2) : '—';
     eoq_round.textContent = isFinite(EOQ_int) ? EOQ_int : '—';
 
-    // find chosen row
+    // find chosen row (note: rows computed for a range; chosenQ might be 0 -> no row)
     const chosenRow = rows.find(r => r.q === chosenQ);
     if(chosenRow){
       ordering_val.textContent = '$' + chosenRow.ordering.toFixed(2);
       holding_val.textContent = '$' + chosenRow.holding.toFixed(2);
-      total_val.textContent = '$' + (chosenRow.ordering + chosenRow.holding).toFixed(2);
+      total_val.textContent = '$' + chosenRow.total.toFixed(2);
     } else {
-      ordering_val.textContent = '—';
-      holding_val.textContent = '—';
-      total_val.textContent = '—';
+      ordering_val.textContent = '$0.00';
+      holding_val.textContent = '$0.00';
+      total_val.textContent = '$0.00';
     }
 
     // build chart data arrays
     const qs = rows.map(r => r.q);
     const orderingSeries = rows.map(r => Number(r.ordering.toFixed(8)));
     const holdingSeries = rows.map(r => Number(r.holding.toFixed(8)));
-    const totalSeries = rows.map(r => Number((r.ordering + r.holding).toFixed(8)));
+    const totalSeries = rows.map(r => Number(r.total.toFixed(8)));
 
     // Update Chart
     renderChart(qs, orderingSeries, holdingSeries, totalSeries, EOQ_int, chosenQ);
 
-    // Update Table (showing all rows but truncated to reasonable length on screen)
+    // Update Table (showing all rows)
     renderTable(rows);
   }
 
@@ -282,11 +289,9 @@
     });
 
     // add EOQ and chosen point annotations via scatter overlays (simple)
-    // Add EOQ marker
     if(EOQ_int >= 1 && qs.includes(EOQ_int)){
       const eoqIndex = qs.indexOf(EOQ_int);
       const eoqVal = totalSeries[eoqIndex];
-      // draw small circle on chart canvas
       drawMarker(chart, eoqIndex, eoqVal, 'EOQ ≈ ' + EOQ_int, 'black');
     }
     if(chosenQ >=1 && qs.includes(chosenQ)){
@@ -297,20 +302,16 @@
   }
 
   function drawMarker(chart, index, yvalue, label, color){
-    // Convert to pixel pos
-    const meta = chart.getDatasetMeta(2); // total series meta
     const xScale = chart.scales.x;
     const yScale = chart.scales.y;
     const x = xScale.getPixelForValue(chart.data.labels[index]);
     const y = yScale.getPixelForValue(yvalue);
     const ctx = chart.ctx;
     ctx.save();
-    // circle
     ctx.fillStyle = color || 'black';
     ctx.beginPath();
     ctx.arc(x, y, 6, 0, 2*Math.PI);
     ctx.fill();
-    // label
     ctx.fillStyle = 'rgba(255,255,255,0.9)';
     ctx.font = '12px sans-serif';
     ctx.textAlign = 'center';
@@ -319,17 +320,15 @@
   }
 
   function renderTable(rows){
-    // Build HTML table
     let html = '<table><thead><tr><th>Q</th><th>Ordering ($)</th><th>Holding ($)</th><th>Total ($)</th></tr></thead><tbody>';
-    // show all rows but warn: for big maxQ this might be long
     for(const r of rows){
-      html += `<tr><td style="text-align:left">${r.q}</td><td>$${r.ordering.toFixed(2)}</td><td>$${r.holding.toFixed(2)}</td><td>$${(r.ordering+r.holding).toFixed(2)}</td></tr>`;
+      html += `<tr><td style="text-align:left">${r.q}</td><td>$${r.ordering.toFixed(2)}</td><td>$${r.holding.toFixed(2)}</td><td>$${r.total.toFixed(2)}</td></tr>`;
     }
     html += '</tbody></table>';
     tableContainer.innerHTML = html;
   }
 
-  // CSV download
+  // CSV download (no purchase column)
   function downloadCSV(){
     const D = parseFloat(D_in.value) || 0;
     const S = parseFloat(S_in.value) || 0;
@@ -338,9 +337,9 @@
     const maxFactor = parseFloat(maxFactor_in.value) || 2.5;
     const chosenQ = parseInt(Q_num.value) || 1;
     const {rows, EOQ, EOQ_int, maxQ} = generateTable(D,S,H,unitCost, maxFactor, chosenQ);
-    let csv = 'Q,Ordering,Holding,Total\\n';
+    let csv = 'Q,Ordering,Holding,Total\n';
     for(const r of rows){
-      csv += `${r.q},${r.ordering.toFixed(4)},${r.holding.toFixed(4)},${(r.ordering+r.holding).toFixed(4)}\\n`;
+      csv += `${r.q},${r.ordering.toFixed(4)},${r.holding.toFixed(4)},${r.total.toFixed(4)}\n`;
     }
     const blob = new Blob([csv], {type:'text/csv;charset=utf-8;'});
     const url = URL.createObjectURL(blob);
@@ -352,15 +351,22 @@
 
   // wire up events
   Q_range.addEventListener('input', ()=>{ Q_num.value = Q_range.value; updateUI(); });
-  Q_num.addEventListener('change', ()=>{ Q_range.value = Q_num.value; updateUI(); });
+  Q_num.addEventListener('change', ()=>{ 
+    // ensure integer
+    Q_num.value = Math.floor(Number(Q_num.value) || 0);
+    Q_range.value = Q_num.value; updateUI(); 
+  });
   setEOQ_btn.addEventListener('click', ()=>{
-    // set to rounded EOQ
     const D = parseFloat(D_in.value) || 0;
     const S = parseFloat(S_in.value) || 0;
     const H = parseFloat(H_in.value) || 0;
     const EOQ = computeEOQ(D,S,H);
-    const EOQ_int = Math.max(1, Math.round(EOQ || 0));
-    Q_num.value = EOQ_int; Q_range.value = EOQ_int; updateUI();
+    let EOQ_int = isFinite(EOQ) ? Math.max(0, Math.round(EOQ || 0)) : 0;
+    const D_int = Math.max(0, Math.floor(D));
+    if (EOQ_int > D_int) EOQ_int = D_int;
+    Q_num.value = EOQ_int;
+    Q_range.value = EOQ_int;
+    updateUI();
   });
   recompute_btn.addEventListener('click', updateUI);
   download_btn.addEventListener('click', downloadCSV);
